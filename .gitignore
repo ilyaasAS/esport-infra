@@ -1,3 +1,17 @@
-frontend/
-backend/
+# Secrets & environnement local
 .env
+.env.*.local
+
+# Dépendances & artefacts de build
+**/node_modules/
+**/dist/
+**/target/
+*.class
+
+# IDE & OS
+.idea/
+.vscode/
+.DS_Store
+
+# Logs
+*.log
