@@ -1,5 +1,6 @@
 # Secrets & environnement local
 .env
+.env.local
 .env.*.local
 
 # Dépendances & artefacts de build
