@@ -1,36 +1,108 @@
-# Esport — monorepo (frontend, backend, Docker)
+# Esport Hub - L'écosystème de gestion de ligue piloté par l'IA
 
-## Fichiers d’environnement (une seule source de vérité par usage)
+`esport-infra` est le pilier d'orchestration de la plateforme Esport Hub.  
+Sa mission est de livrer un environnement **production-like**, reproductible et sécurisé en une seule commande.
 
-| Fichier | Rôle | Quand l’utiliser |
-|--------|------|-------------------|
-| **`.env` à la racine** (`/esport/.env`) | **Docker Compose uniquement** | Copie de `.env.example` racine. Contient **`DB_ROOT_PASSWORD`** : mot de passe root MySQL injecté dans le service `db` et, pour le conteneur backend, **`DB_PASSWORD`** (via interpolation `${DB_ROOT_PASSWORD}` dans `docker-compose.yml`). **Ne pas y mettre `JWT_SECRET`** : ce n’est pas lu par Spring. |
-| **`.env.example` à la racine** | Modèle pour la racine | Documente `DB_ROOT_PASSWORD` avec un exemple ; à copier vers `.env`. |
-| **`backend/.env`** | **Application Spring Boot** (local ou conteneur) | **`JWT_SECRET`**, **`DB_PASSWORD`** (hors Docker Compose tu le renseignes à la main ; avec Compose il est surchargé par la variable d’environnement du service), **`ADMIN_PASSWORD`**, **`OLLAMA_BASE_URL`**, etc. **C’est la source des secrets applicatifs.** |
-| **`backend/.env.example`** | Modèle pour le backend | Liste les clés attendues sans valeurs secrètes. |
-| **`frontend/.env`** | **Build / dev Vite** | Copie de `frontend/.env.example`. Définit notamment **`VITE_API_BASE_URL`** (URL de l’API, ex. `http://localhost:8080/api`) — utilisée par `httpClient` et `getApiRootUrl()`. |
+## Vision globale
 
-### Cohérence des variables critiques
+La solution repose sur trois piliers indépendants et complémentaires:
 
-- **`DB_PASSWORD` (Spring)** doit être le **même** que le mot de passe MySQL root utilisé par le conteneur `db`. Avec Docker Compose, définis **`DB_ROOT_PASSWORD`** dans **`.env` racine** : Compose applique la même valeur au backend comme `DB_PASSWORD`.
-- **`JWT_SECRET`** : défini **uniquement** dans `backend/.env`. Si tu le changes, les anciens JWT deviennent invalides — déconnexion puis nouvelle connexion.
+- **`esport-infra`**: orchestration Docker, réseau inter-services, variables d'environnement et cycle de vie runtime.
+- **`esport-backend`**: cerveau métier Spring Boot + Oracle IA + sécurité applicative.
+- **`esport-frontend`**: interface React orientée performance, expérience utilisateur temps réel, consommation API/SSE.
 
-### Commandes utiles
+Cette séparation multi-dépôts garantit:
+
+- isolation des responsabilités,
+- évolutivité indépendante des composants,
+- déploiement fiable via un socle d'infrastructure unifié.
+
+## Stack technique (infra)
+
+| Domaine | Technologie | Rôle |
+|---|---|---|
+| Orchestration | Docker Compose | Démarrage et câblage des services |
+| Base de données | MySQL 8 | Persistence transactionnelle |
+| Moteur IA local | Ollama | Exécution du modèle LLM |
+| API métier | Spring Boot (conteneur backend) | Exposition REST/SSE et logique métier |
+| Interface web | Nginx + bundle Vite (conteneur frontend) | Distribution frontend optimisée |
+| Build | Multi-stage Docker builds | Compilation isolée, artefacts minimaux |
+
+## Architecture d'orchestration Docker
+
+Le `docker-compose.yml` relie les services suivants:
+
+- **`db`**: MySQL 8 avec volume persistant `db_data` et healthcheck.
+- **`ollama`**: moteur IA local exposé sur `11434` avec volume `ollama_data`.
+- **`ollama-pull-model`**: job d'initialisation pour précharger le modèle (`mistral`).
+- **`backend`**: build Java 21 multi-stage, exposé sur `8080`, dépendant de `db`.
+- **`frontend`**: build Node/Nginx multi-stage, exposé sur `80`, dépendant du `backend`.
+
+Le chaînage `depends_on` + `healthcheck` impose un démarrage ordonné et réduit les états instables au bootstrap.
+
+## Secure by Design
+
+La posture de sécurité est native dans l'architecture:
+
+- isolation réseau entre services Docker,
+- secrets applicatifs externalisés via variables d'environnement,
+- contrôle d'accès applicatif JWT côté backend,
+- moteur IA local (pas d'exposition obligatoire à un service LLM public),
+- conteneurs runtime allégés (artefacts de build uniquement).
+
+## Variables d'environnement
+
+| Fichier | Portée | Usage |
+|---|---|---|
+| `.env` (racine) | Infrastructure Compose | Variables d'orchestration (ex. `DB_ROOT_PASSWORD`) |
+| `backend/.env` | Application backend | Secrets applicatifs (`JWT_SECRET`, `ADMIN_PASSWORD`, etc.) |
+| `frontend/.env` | Build/dev frontend | Configuration Vite (`VITE_API_BASE_URL`) |
+
+## Procédure de déploiement (3 dépôts)
+
+### 1) Cloner les trois dépôts
 
 ```bash
-# Depuis la racine du dépôt
+mkdir esport-hub && cd esport-hub
+git clone <URL_GIT_ESPORT_INFRA> esport-infra
+git clone <URL_GIT_ESPORT_BACKEND> esport-backend
+git clone <URL_GIT_ESPORT_FRONTEND> esport-frontend
+```
+
+### 2) Préparer la configuration
+
+```bash
+cd esport-infra
+cp .env.example .env
+```
+
+Renseigner les secrets requis (`DB_ROOT_PASSWORD`, etc.).  
+Configurer également `esport-backend/.env` et `esport-frontend/.env` selon les modèles fournis.
+
+### 3) Lancer l'Empire avec une seule commande
+
+```bash
 docker compose up -d --build
 ```
 
----
+### 4) Vérifier l'état des services
 
-## Sécurité des rôles (rappel)
+```bash
+docker compose ps
+docker compose logs -f backend
+```
 
-- **`USER`** et **`ADMIN`** : règles dans `backend/.../SecurityConfig.java` — `POST /api/players` réservé aux utilisateurs authentifiés (USER ou ADMIN), `POST /api/matches` réservé aux **ADMIN** ; le reste de `/api/**` exige une session JWT valide.
+## Endpoints et accès
 
----
+- Frontend: [http://localhost](http://localhost)
+- Backend API: [http://localhost:8080/api](http://localhost:8080/api)
+- Actuator santé: [http://localhost:8080/actuator/health](http://localhost:8080/actuator/health)
+- Ollama: [http://localhost:11434](http://localhost:11434)
 
-## Frontend
+## Philosophie de livraison
 
-- **`VITE_API_BASE_URL`** : voir `frontend/.env.example` ; sans cette variable, le client HTTP utilise `http://localhost:8080/api` par défaut.
-- Voir aussi `frontend/README.md` pour le template Vite.
+Esport Hub est conçu pour être **Production-Ready**:
+
+- compilation à l'intérieur des conteneurs,
+- cohérence d'environnement entre développeurs, CI et déploiement,
+- architecture modulaire, observable et sécurisée dès la conception.
