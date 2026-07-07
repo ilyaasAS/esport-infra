@@ -2,9 +2,14 @@ services:
   db:
     image: mysql:8.0
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     environment:
       MYSQL_DATABASE: esport_db
       MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+      # Utilisateur applicatif dédié : privilèges limités à la base esport_db (durcissement ANSSI).
+      MYSQL_USER: ${DB_APP_USER}
+      MYSQL_PASSWORD: ${DB_APP_PASSWORD}
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -h localhost -P 3306 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
       interval: 10s
@@ -12,15 +17,18 @@ services:
       retries: 10
       start_period: 20s
     ports:
-      - "33668:3306"
+      # Exposé uniquement sur la loopback : pas d'exposition sur le réseau local.
+      - "127.0.0.1:33668:3306"
     volumes:
       - db_data:/var/lib/mysql
 
   ollama:
-    image: ollama/ollama:latest
+    image: ollama/ollama:0.5.7
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     ports:
-      - "11434:11434"
+      - "127.0.0.1:11434:11434"
     volumes:
       - ollama_data:/root/.ollama
     healthcheck:
@@ -31,13 +39,13 @@ services:
       start_period: 60s
 
   ollama-pull-model:
-    image: ollama/ollama:latest
+    image: ollama/ollama:0.5.7
     depends_on:
       ollama:
         condition: service_healthy
     environment:
       OLLAMA_HOST: http://ollama:11434
-    entrypoint: ["/bin/sh", "-c", "ollama pull mistral"]
+    entrypoint: ["/bin/sh", "-c", "ollama pull ${OLLAMA_MODEL}"]
     restart: "no"
 
   backend:
@@ -46,13 +54,21 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     env_file:
       - ./backend/.env
     environment:
+      SPRING_PROFILES_ACTIVE: dev
       DB_HOST: db
       DB_PORT: 3306
-      DB_PASSWORD: ${DB_ROOT_PASSWORD}
+      # Connexion via l'utilisateur applicatif (jamais root) : moindre privilège.
+      DB_USER: ${DB_APP_USER}
+      DB_PASSWORD: ${DB_APP_PASSWORD}
       OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL}
     ports:
       - "8080:8080"
     healthcheck:
@@ -72,8 +88,13 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     ports:
-      - "80:80"
+      # Le conteneur Nginx non-privilégié écoute sur 8080 en interne.
+      - "80:8080"
     deploy:
       resources:
         limits:
