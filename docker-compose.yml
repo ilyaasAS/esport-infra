@@ -45,8 +45,27 @@ services:
         condition: service_healthy
     environment:
       OLLAMA_HOST: http://ollama:11434
-    entrypoint: ["/bin/sh", "-c", "ollama pull ${OLLAMA_MODEL}"]
+    entrypoint: ["/bin/sh", "-c", "ollama pull ${OLLAMA_MODEL:-llama3.2:1b} && ollama pull ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}"]
     restart: "no"
+
+  chroma:
+    image: chromadb/chroma:0.6.2
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - IS_PERSISTENT=TRUE
+      - ANONYMIZED_TELEMETRY=FALSE
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - chroma_data:/chroma/chroma
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/api/v1/heartbeat >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
 
   backend:
     build:
@@ -54,10 +73,15 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      chroma:
+        condition: service_healthy
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    extra_hosts:
+      # Prise en charge de host.docker.internal pour basculer facilement sur Ollama natif macOS (Metal)
+      - "host.docker.internal:host-gateway"
     env_file:
       - ./backend/.env
     environment:
@@ -67,8 +91,13 @@ services:
       # Connexion via l'utilisateur applicatif (jamais root) : moindre privilège.
       DB_USER: ${DB_APP_USER}
       DB_PASSWORD: ${DB_APP_PASSWORD}
-      OLLAMA_BASE_URL: http://ollama:11434
-      OLLAMA_MODEL: ${OLLAMA_MODEL}
+      CHROMA_HOST: chroma
+      CHROMA_PORT: 8000
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:1b}
+      OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
+      LANGFUSE_HOST: ${LANGFUSE_HOST:-https://cloud.langfuse.com}
+      LANGFUSE_AUTH_HEADER: ${LANGFUSE_AUTH_HEADER:-}
     ports:
       - "8080:8080"
     healthcheck:
@@ -103,3 +132,4 @@ services:
 volumes:
   db_data:
   ollama_data:
+  chroma_data:
